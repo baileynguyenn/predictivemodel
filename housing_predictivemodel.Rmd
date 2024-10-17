@@ -1,0 +1,715 @@
+---
+title: "Predictive Analytics for Property Price"
+output: html_document
+date: "2024-08-18"
+---
+
+### Part 1:
+
+```{r}
+library(dplyr)
+
+# Load the dataset
+data <- read.csv("HousingValuation.csv")
+
+# Define a function to rank ordinal variables
+rank_ordinal <- function(variable, levels) {
+  factor(variable, levels = levels, ordered = TRUE) %>% as.numeric()
+}
+
+# Transform ordinal variables using ranking
+data <- data %>%
+  mutate(
+    Slope = rank_ordinal(Slope, levels = c("Gtl", "Mod", "Sev")), 
+    ExteriorCondition = rank_ordinal(ExteriorCondition, levels = c("Po", "Fa", "TA", "Gd", "Ex")), 
+    BasementCondition = rank_ordinal(BasementCondition, levels = c("Po", "Fa", "TA", "Gd", "Ex")),
+    KitchenQuality = rank_ordinal(KitchenQuality, levels = c("Po", "Fa", "TA", "Gd", "Ex")),
+    PavedDrive = rank_ordinal(PavedDrive, levels = c("N", "P", "Y")), 
+    CentralAir = as.numeric(CentralAir == "Y")  # Transform to binary numeric
+  )
+
+# Create dummy variables for nominal columns
+data <- data %>%
+  mutate(
+    LandContour_Lvl = as.numeric(LandContour == "Lvl"),
+    LandContour_Bnk = as.numeric(LandContour == "Bnk"),
+    LandContour_HLS = as.numeric(LandContour == "HLS"),
+    LandContour_Low = as.numeric(LandContour == "Low"),
+    
+    Utilities_AllPub = as.numeric(Utilities == "AllPub"),
+    Utilities_NoSeWa = as.numeric(Utilities == "NoSeWa"),
+    
+    LotConfig_Inside = as.numeric(LotConfig == "Inside"),
+    LotConfig_Corner = as.numeric(LotConfig == "Corner"),
+    LotConfig_CulDSac = as.numeric(LotConfig == "CulDSac"),
+    LotConfig_FR2 = as.numeric(LotConfig == "FR2"),
+    LotConfig_FR3 = as.numeric(LotConfig == "FR3"),
+    
+    DwellClass_1Fam = as.numeric(DwellClass == "1Fam"),
+    DwellClass_2FmCon = as.numeric(DwellClass == "2FmCon"),
+    DwellClass_Duplx = as.numeric(DwellClass == "Duplx"),
+    DwellClass_TwnhsE = as.numeric(DwellClass == "TwnhsE"),
+    DwellClass_Twnhs = as.numeric(DwellClass == "Twnhs"),
+    
+    GarageType_Attchd = as.numeric(GarageType == "Attchd"),
+    GarageType_Basment = as.numeric(GarageType == "Basment"),
+    GarageType_BuiltIn = as.numeric(GarageType == "BuiltIn"),
+    GarageType_Detchd = as.numeric(GarageType == "Detchd"),
+    GarageType_None = as.numeric(is.na(GarageType))  # Handle missing garage type explicitly
+  )
+
+# Drop original nominal columns after creating dummy variables
+data <- data %>%
+  select(-LandContour, -Utilities, -LotConfig, -DwellClass, -GarageType)
+
+# View the transformed data
+head(data)
+View(data)
+
+```
+
+### Part 2:
+
+```{r}
+library(dplyr)
+
+# Correctly identify continuous and categorical variables
+continuous_vars <- c("LotArea", "TotalBSF", "LowQualFinSF", "LivingArea", "OpenPorchSF", "PoolArea", "SalePrice")
+
+categorical_vars <- c("Slope", "ExteriorCondition", "BasementCondition", "KitchenQuality", "PavedDrive", "CentralAir", "OverallQuality", "OverallCondition", "LotShape")
+
+
+# Summary statistics for continuous variables including IQR
+summary_stats_continuous <- data %>%
+  summarise(across(all_of(continuous_vars), 
+                   list(
+                        mean = ~mean(. , na.rm = TRUE),
+                        median = ~median(., na.rm = TRUE),
+                        max = ~max(., na.rm = TRUE),
+                        min = ~min(., na.rm = TRUE),
+                        sd = ~sd(., na.rm = TRUE),
+                        IQR = ~IQR(., na.rm = TRUE)
+                        )
+                   ))
+
+summary_stats_continuous <- summary_stats_continuous %>%
+  pivot_longer(everything(), names_to = "statistic", values_to = "value") %>%
+  separate(statistic, into = c("variable", "stat"), sep = "_") %>%
+  pivot_wider(names_from = variable, values_from = value)
+
+# Counts for categorical variables
+summary_stats_categorical <- data %>%
+  summarise(across(all_of(categorical_vars), 
+                   ~ length(unique(.))))
+
+# View the summary statistics
+print("Summary statistics for continuous variables:")
+print(summary_stats_continuous)
+
+print("Unique category counts for categorical variables:")
+print(summary_stats_categorical)
+
+# Checking for extreme values in continuous variables using boxplots
+boxplot(data[, continuous_vars], main = "Boxplot for Continuous Variables", col = "lightblue")
+
+# Identify extreme values using IQR method
+identify_extremes <- function(x) {
+  Q1 <- quantile(x, 0.25, na.rm = TRUE)
+  Q3 <- quantile(x, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  lower_bound <- Q1 - 1.5 * IQR
+  upper_bound <- Q3 + 1.5 * IQR
+  return(x[x < lower_bound | x > upper_bound])
+}
+
+# Apply the outlier detection function to each continuous variable
+extreme_values <- lapply(data[, continuous_vars], identify_extremes)
+names(extreme_values) <- continuous_vars
+
+print("Extreme values in continuous variables:")
+print(extreme_values)
+
+```
+
+### Part 3:
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(purrr)
+
+#Plot original histograms for each continuous variable
+data %>%
+  select(all_of(continuous_vars)) %>%  # Select only continuous variables
+  gather() %>%  # Convert data to long format for ggplot
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") +  # Create a facet for each variable
+  geom_histogram(col = "black", fill = "orange", bins = 30) +
+  ggtitle("Original Histograms of Continuous Variables") +
+  theme_minimal()
+
+# Re-assess the summary statistics
+print("Summary statistics for continuous variables:")
+print(summary_stats_continuous)
+
+# Apply log transformation to address skewness
+data_log_transformed <- data %>%
+  mutate(across(all_of(continuous_vars), ~ log(.), .names = "Log_{col}"))
+
+#Plot histograms for log-transformed variables
+data_log_transformed %>%
+  select(starts_with("Log_")) %>% 
+  gather() %>%
+  ggplot(aes(value)) +
+  facet_wrap(~ key, scales = "free") + 
+  geom_histogram(col = "black", fill = "blue", bins = 30) +
+  ggtitle("Log-Transformed Histograms of Continuous Variables") +
+  theme_minimal()
+
+
+
+
+```
+
+### Part 4:
+
+#### 4.a
+
+```{r}
+library(psych)  
+library(corrplot) 
+
+#Identify variables with missing values
+missing_values_summary <- colSums(is.na(data))
+print("Summary of missing values in each variable:")
+print(missing_values_summary)
+
+
+print(missmap(data))
+```
+
+#### 4.b
+
+```{r}
+# Method 1: Replace all NAs with 0
+all.zeros <- data  
+all.zeros[is.na(all.zeros)] <- 0  # Replace all NAs with 0
+
+# Correlation analysis after replacing NAs with 0
+corclean <- cor(all.zeros)
+round(corclean, digits = 3)
+corrplot(corclean, 
+         method = "circle",         
+         tl.cex = 0.6,             
+         tl.col = "black",          
+         tl.srt = 45,               
+         addgrid.col = "lightgray"  
+)
+title(main = "Replacing with 0", col.main = "black", cex.main = 1.5, font.main = 2)
+
+#Comparing
+plot(density(all.zeros$BasementCondition), col="red", 
+main="BasementCondition Original (Blue) vs BasementCondition (Red) when replacing NAs with 0",
+cex.main=0.8)
+lines(density(data$BasementCondition, na.rm = TRUE), col="blue")
+```
+
+```{r}
+# Method 2: Delete rows with NAs
+all.deleted <- data[complete.cases(data),]  # Keep only complete cases
+
+# Correlation analysis after deleting rows with NAs
+cordelete <- cor(all.deleted)
+round(cordelete, digits = 3)
+corrplot(cordelete, 
+         method = "circle",         
+         tl.cex = 0.6,             
+         tl.col = "black",          
+         tl.srt = 45,               
+         addgrid.col = "lightgray"  
+)
+title(main = "Delete rows with NAs", col.main = "black", cex.main = 1.5, font.main = 2)
+
+#Comparing
+plot(density(all.deleted$BasementCondition), col="red", 
+main="BasementCondition Original (Blue) vs BasementCondition (Red) when deleting NAs",
+cex.main=0.8)
+lines(density(data$BasementCondition, na.rm = TRUE), col="blue")
+```
+
+```{r}
+# Step 3: Replace all NAs with the mean of each column
+all.mean <- data  
+
+# Replace NAs with mean for each column
+for (var in colnames(all.mean)) {
+  if (any(is.na(all.mean[[var]]))) {
+    all.mean[[var]][is.na(all.mean[[var]])] <- mean(all.mean[[var]], na.rm = TRUE)
+  }
+}
+
+# Correlation analysis after replacing NAs with the mean
+cormean <- cor(all.mean)
+round(cormean, digits = 3)
+corrplot(cormean, 
+         method = "circle",         
+         tl.cex = 0.6,             
+         tl.col = "black",          
+         tl.srt = 45,               
+         addgrid.col = "lightgray"  
+)
+title(main = "Replace NAs with mean", col.main = "black", cex.main = 1.5, font.main = 2)
+
+#Example:
+plot(density(all.mean$BasementCondition), col="red", 
+main="BasementCondition Original (Blue) vs BasementCondition (Red) when replacing NAs with mean",
+cex.main=0.8)
+lines(density(data$BasementCondition, na.rm = TRUE), col="blue")
+```
+
+#### 4.c
+
+```{r}
+means <- data.frame(
+  Method = c("Original", "Replace with 0", "Delete NAs", "Replace with Mean"),
+  Mean_BasementCondition = c(
+    mean(data$BasementCondition, na.rm = TRUE),
+    mean(all.zeros$BasementCondition, na.rm = TRUE),
+    mean(all.deleted$BasementCondition, na.rm = TRUE),
+    mean(all.mean$BasementCondition, na.rm = TRUE)
+  ))
+
+print(means)
+
+```
+
+### Part 5:
+
+```{r}
+library(corrplot)
+library(psych)
+
+correlation_matrix <- cor(all.deleted[, sapply(all.deleted, is.numeric)], use = "complete.obs")
+
+corrplot(correlation_matrix, 
+         method = "color", 
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45,      
+         tl.cex = 0.7,     
+         addgrid.col = NA, 
+         mar = c(0, 0, 1, 0)) 
+
+
+```
+
+5b. Dimensionality Reduction Based on Correlations
+
+```{r}
+# Find pairs of variables with high correlation 
+target <- all.deleted$SalePrice
+HV_dataset <- subset(all.deleted, select = -c(SalePrice))
+
+library(caret)
+
+HV_dataset <- na.omit(HV_dataset)
+
+corrM <- cor(HV_dataset)
+corrM[is.na(corrM)] <- 0
+
+highlyCorrM <- findCorrelation(corrM, cutoff = 0.8)
+
+
+high_corr_names <- colnames(corrM)[highlyCorrM]
+
+if (length(high_corr_names) > 0) {
+  print("Highly correlated variables based on the cutoff:")
+  print(high_corr_names)} else {
+  print("No pairs with correlation higher than the cutoff were found.")}
+```
+
+```{r}
+# Dimensionality reduction by removing one variable from each highly correlated pair
+data_reduced <- HV_dataset %>%
+  select(-LivingArea, -GarageType_Detchd, -Utilities_AllPub)
+
+# Recalculate the correlation matrix for the reduced dataset
+correlation_matrix_reduced <- cor(data_reduced[, sapply(data_reduced, is.numeric)])
+
+# Visualize the correlation matrix after removing highly correlated variables
+ggcorr(data_reduced)
+
+#Merge the target variable back to the dataset
+data_reduced$SalePrice <- target
+View(data_reduced)
+
+```
+
+5c. Explore the Distribution of Selected Variables Against the Target Variable
+
+```{r}
+library(ggplot2)
+
+# Jitter plot for LivingArea vs SalePrice
+ggplot(all.deleted, aes(x = LivingArea, y = SalePrice)) +
+  geom_jitter(color = "darkblue", alpha = 0.5, width = 0.2) +
+  labs(title = "Jitter Plot of Living Area vs Sale Price",
+       x = "Living Area (Square Feet)",
+       y = "Sale Price") +
+  theme_minimal()
+
+# GarageType_Detchd
+ggplot(all.deleted, aes(x = factor(GarageType_Detchd), y = SalePrice)) +
+  geom_violin(fill = "lightblue", color = "black") +
+  labs(title = "Sale Price Distribution by Detached Garage Type", 
+       x = "Detached Garage (1 = Yes, 0 = No)", 
+       y = "Sale Price") +
+  theme_minimal()
+
+# Utilities_AllPub
+ggplot(all.deleted, aes(x = factor(Utilities_AllPub), y = SalePrice)) +
+  geom_boxplot(fill = "lightyellow", color = "black") +
+  labs(title = "Sale Price Distribution by All Public Utilities", 
+       x = "All Public Utilities (1 = Yes, 0 = No)", 
+       y = "Sale Price") +
+  theme_minimal()
+
+```
+
+
+### Part 6
+
+#### 6.a
+
+```{r}
+#Normalize the Distribution of data
+
+cols_to_log <- c('LotArea', 'TotalBSF')
+
+linear.data <- data_reduced
+linear.data[cols_to_log] <- log(data_reduced[cols_to_log])
+```
+
+Data Partioning
+
+```{r}
+smp_size <- floor(2/3 * nrow(linear.data))
+set.seed(2)
+
+linear.data <-
+linear.data[sample(nrow(linear.data)), ]
+
+data.train <- linear.data[1:smp_size, ]
+data.test <- linear.data[(smp_size+1):nrow(linear.data),]
+
+```
+
+Building Linear Regression
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+# Define the formula
+formula = SalePrice ~.
+
+# Fit the linear regression model
+model1 <- lm(formula = formula, data = data.train)
+
+# Display the coefficients of the model
+summary(model1)$coefficients
+
+as.formula(
+paste0("y ~ ", round(coefficients(model1)[1],2), " + ",
+paste(sprintf("%.2f * %s",coefficients(model1)[-1],
+names(coefficients(model1)[-1])),
+collapse=" + ")))
+
+```
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+#Make Predictions
+data.train$predicted.SalePrice <- predict(model1, data.train)
+data.test$predicted.SalePrice <- predict(model1, data.test)
+
+print("Actual Values")
+head(data.test$SalePrice[1:5])
+print("Predicted Values")
+head(data.test$predicted.SalePrice[1:5])
+
+pl1 <-data.test %>%
+ggplot(aes(SalePrice,predicted.SalePrice)) +
+geom_point(alpha=0.5) +
+stat_smooth(aes(colour='red')) +
+xlab('Actual value of SalePrice') +
+ylab('Predicted value of SalePrice')+
+theme_bw()
+ggplotly(pl1)
+```
+
+#### 6.b
+
+2nd Linear Regression cutoff at 0.7
+
+```{r}
+#Find the high correlated variables 
+highlyCorrM2 <- findCorrelation(corrM, cutoff = 0.7)
+
+high_corr_names_2 <- colnames(corrM)[highlyCorrM2]
+
+if (length(high_corr_names_2) > 0) {
+  print("Highly correlated variables based on the cutoff:")
+  print(high_corr_names_2)
+} else {
+  print("No pairs with correlation higher than the cutoff were found.")
+}
+```
+
+```{r}
+# Dimensionality reduction by removing one variable from each highly correlated pair
+data_reduced_2 <- linear.data %>%
+  select(-DwellClass_1Fam, -LotConfig_Inside)
+
+ggcorr(data_reduced_2)
+
+View(data_reduced_2)
+
+```
+
+```{r}
+smp_size2 <- floor(2/3 * nrow(data_reduced_2))
+set.seed(2)
+
+data_reduced_2 <-
+data_reduced_2[sample(nrow(data_reduced_2)), ]
+
+data.train2 <- data_reduced_2[1:smp_size2, ]
+data.test2 <- data_reduced_2[(smp_size2+1):nrow(data_reduced_2),]
+```
+
+```{r}
+formula = SalePrice ~.
+model2 <- lm(formula = formula, data = data.train2)
+
+# Display the coefficients of the model
+summary(model2)$coefficients
+
+as.formula(
+paste0("y ~ ", round(coefficients(model2)[1],2), " + ",
+paste(sprintf("%.2f * %s",coefficients(model2)[-1],
+names(coefficients(model2)[-1])),
+collapse=" + ")))
+```
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+#Make Predictions
+data.train2$predicted.SalePrice <- predict(model2, data.train2)
+data.test2$predicted.SalePrice <- predict(model2, data.test2)
+
+print("Actual Values")
+head(data.test2$SalePrice[1:5])
+print("Predicted Values of Model 2")
+head(data.test2$predicted.SalePrice[1:5])
+
+pl2 <-data.test2 %>%
+ggplot(aes(SalePrice,predicted.SalePrice)) +
+geom_point(alpha=0.5) +
+stat_smooth(aes(colour='red')) +
+xlab('Actual value of SalePrice') +
+ylab('Predicted value of SalePrice of Model 2')+
+theme_bw()
+ggplotly(pl2)
+```
+
+3rd Linear Regression with cutoff at 0.6
+
+```{r}
+highlyCorrM3 <- findCorrelation(corrM, cutoff = 0.6)
+
+high_corr_names_3 <- colnames(corrM)[highlyCorrM3]
+
+if (length(high_corr_names_3) > 0) {
+  print("Highly correlated variables based on the cutoff:")
+  print(high_corr_names_3)
+} else {
+  print("No pairs with correlation higher than the cutoff were found.")
+}
+```
+
+```{r}
+data_reduced_3 <- linear.data %>%
+  select(-DwellClass_1Fam, -LotConfig_Inside, -OverallQuality, -TotalRmsAbvGrd, -LandContour_Lvl)
+
+ggcorr(data_reduced_3)
+
+View(data_reduced_3)
+```
+
+```{r}
+smp_size3 <- floor(2/3 * nrow(data_reduced_3))
+set.seed(2)
+
+data_reduced_3 <-
+data_reduced_3[sample(nrow(data_reduced_3)), ]
+
+data.train3 <- data_reduced_3[1:smp_size3, ]
+data.test3 <- data_reduced_3[(smp_size3+1):nrow(data_reduced_3),]
+```
+
+```{r}
+formula = SalePrice ~.
+model3 <- lm(formula = formula, data = data.train3)
+
+# Display the coefficients of the model
+summary(model3)$coefficients
+
+as.formula(
+paste0("y ~ ", round(coefficients(model3)[1],2), " + ",
+paste(sprintf("%.2f * %s",coefficients(model3)[-1],
+names(coefficients(model3)[-1])),
+collapse=" + ")))
+```
+
+```{r}
+library(ggplot2)
+library(plotly)
+
+#Make Predictions
+data.train3$predicted.SalePrice <- predict(model3, data.train3)
+data.test3$predicted.SalePrice <- predict(model3, data.test3)
+
+print("Actual Values")
+head(data.test3$SalePrice[1:5])
+print("Predicted Values of Model 3")
+head(data.test3$predicted.SalePrice[1:5])
+
+pl3 <-data.test3 %>%
+ggplot(aes(SalePrice,predicted.SalePrice)) +
+geom_point(alpha=0.5) +
+stat_smooth(aes(colour='red')) +
+xlab('Actual value of SalePrice') +
+ylab('Predicted value of SalePrice of Model 3')+
+theme_bw()
+ggplotly(pl3)
+```
+
+#### 6.c
+
+```{r}
+error1 <- data.test$SalePrice-data.test$predicted.SalePrice
+rmse1 <- sqrt(mean(error1^2))
+print(paste("Root Mean Square Error of Model 1: ", rmse1))
+
+error2 <- data.test2$SalePrice-data.test2$predicted.SalePrice
+rmse2 <- sqrt(mean(error2^2))
+print(paste("Root Mean Square Error of Model 2: ", rmse2))
+
+error3 <- data.test3$SalePrice-data.test3$predicted.SalePrice
+rmse3 <- sqrt(mean(error3^2))
+print(paste("Root Mean Square Error of Model 3: ", rmse3))
+```
+
+### Part 7
+
+#### 7.a
+
+Data Partioning
+
+```{r}
+smp_size.dtree <- floor(2/3 * nrow(data))
+set.seed(2)
+
+data_reduced.dtree <- data[sample(nrow(data)), ]
+
+data.train.dtree <- data_reduced.dtree[1:smp_size.dtree, ]
+data.test.dtree <- data_reduced.dtree[(smp_size.dtree+1):nrow(data_reduced.dtree),]
+```
+
+```{r}
+library(corrplot)
+library(GGally)
+library(rpart)
+library(rpart.plot)
+# Define the formula
+formula = SalePrice ~.
+
+# Train the decision tree
+dtree <- rpart(formula, data = data.train.dtree, method = "anova")
+
+# Visualize the decision tree
+rpart.plot(dtree, type = 4, fallen.leaves = FALSE)
+
+# Print the model summary and complexity parameters
+print(dtree)
+
+# Print the complexity parameter table with the updated precision
+printcp(dtree)
+
+```
+
+```{r}
+predicted.SalePrice <- predict(dtree, data.test.dtree)
+
+# Display the first few actual and predicted values
+print("Actual Values:")
+head(data.test.dtree$SalePrice[1:5])
+print("Predicted Values:")
+head(predicted.SalePrice[1:5])
+```
+
+#### 7.b
+
+```{r}
+pruned_dtree1 <- prune(dtree, cp = 0.01) #Most optimal CP
+rpart.plot(pruned_dtree1, type = 4, fallen.leaves = FALSE)
+```
+
+```{r}
+pruned_dtree2 <- prune(dtree, cp = 0.01001) #2nd most optimal 
+rpart.plot(pruned_dtree2, type = 4, fallen.leaves = FALSE)
+```
+
+```{r}
+pruned_dtree3 <- prune(dtree, cp = 0.01127) #3rd most optimal 
+rpart.plot(pruned_dtree3, type = 4, fallen.leaves = FALSE)
+```
+
+#### 7.c
+
+```{r}
+predicted_pruned1.SalePrice <- predict(pruned_dtree1, data.test.dtree)
+error_new1 <- data.test.dtree$SalePrice - predicted_pruned1.SalePrice
+rmse_new1 <- sqrt(mean(error_new1^2))
+
+predicted_pruned2.SalePrice <- predict(pruned_dtree2, data.test.dtree)
+error_new2 <- data.test.dtree$SalePrice - predicted_pruned2.SalePrice
+rmse_new2 <- sqrt(mean(error_new2^2))
+
+predicted_pruned3.SalePrice <- predict(pruned_dtree3, data.test.dtree)
+error_new3 <- data.test.dtree$SalePrice - predicted_pruned3.SalePrice
+rmse_new3 <- sqrt(mean(error_new3^2))
+
+print(paste("Root Mean Square Error of Prunded Decision Tree 1: ", rmse_new1))
+print(paste("Root Mean Square Error of Prunded Decision Tree 2: ", rmse_new2))
+print(paste("Root Mean Square Error of Prunded Decision Tree 3: ", rmse_new3))
+
+```
+
+### Part 8
+
+Compare most optimal decision tree vs linear regression
+
+```{r}
+
+print(paste("Root Mean Square Error of Prunded Decision Tree 1: ", rmse_new1))
+print(paste("Root Mean Square Error of Linear Regression Model 2: ", rmse2))
+
+```
